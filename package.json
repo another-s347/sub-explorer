@@ -1,9 +1,13 @@
 {
     "name": "sub-explorer",
     "displayName": "Sub Explorer",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/another-s347/sub-explorer.git"
+    },
     "description": "Group-focused sub-tree explorer for large repos: create feature groups that show only selected folders/files in a sticky-scroll file tree.",
     "version": "0.0.1",
-    "publisher": "your-name",
+    "publisher": "another-s347",
     "engines": {
         "vscode": "^1.83.0"
     },
