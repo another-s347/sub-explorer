@@ -1,0 +1,183 @@
+{
+    "name": "sub-explorer",
+    "displayName": "Sub Explorer",
+    "description": "Group-focused sub-tree explorer for large repos: create feature groups that show only selected folders/files in a sticky-scroll file tree.",
+    "version": "0.0.1",
+    "publisher": "your-name",
+    "engines": {
+        "vscode": "^1.83.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "main": "./dist/extension.js",
+    "contributes": {
+        "configuration": {
+            "title": "Sub Explorer",
+            "properties": {
+                "subExplorer.displayMode": {
+                    "type": "string",
+                    "enum": [
+                        "name",
+                        "fullPath"
+                    ],
+                    "default": "name",
+                    "description": "Controls how file/folder labels are shown in Sub Explorer: 'name' shows only the current node name; 'fullPath' shows the path from the group's root item to the node (top-level items use workspace-relative paths)."
+                }
+            }
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "subExplorer",
+                    "title": "Sub Explorer",
+                    "icon": "./resources/icon.svg"
+                }
+            ]
+        },
+        "views": {
+            "subExplorer": [
+                {
+                    "id": "subExplorerView",
+                    "name": "Sub Explorer"
+                }
+            ]
+        },
+        "commands": [
+            {
+                "command": "subExplorer.addGroup",
+                "title": "Sub Explorer: Add Group"
+            },
+            {
+                "command": "subExplorer.renameGroup",
+                "title": "Sub Explorer: Rename Group"
+            },
+            {
+                "command": "subExplorer.deleteGroup",
+                "title": "Sub Explorer: Delete Group"
+            },
+            {
+                "command": "subExplorer.addItem",
+                "title": "Sub Explorer: Add Item (File/Folder)"
+            },
+            {
+                "command": "subExplorer.removeItem",
+                "title": "Sub Explorer: Remove Item"
+            },
+            {
+                "command": "subExplorer.openItem",
+                "title": "Sub Explorer: Open"
+            },
+            {
+                "command": "subExplorer.openItemToSide",
+                "title": "Sub Explorer: Open to Side"
+            },
+            {
+                "command": "subExplorer.revealInExplorer",
+                "title": "Sub Explorer: Reveal in Explorer"
+            },
+            {
+                "command": "subExplorer.revealInOS",
+                "title": "Sub Explorer: Reveal in OS"
+            },
+            {
+                "command": "subExplorer.copyPath",
+                "title": "Sub Explorer: Copy Path"
+            },
+            {
+                "command": "subExplorer.copyRelativePath",
+                "title": "Sub Explorer: Copy Relative Path"
+            },
+            {
+                "command": "subExplorer.refresh",
+                "title": "Sub Explorer: Refresh"
+            },
+            {
+                "command": "subExplorer.addSelectedToGroup",
+                "title": "Sub Explorer: Add Selected to Group"
+            }
+        ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "subExplorer.addSelectedToGroup",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@100"
+                }
+            ],
+            "view/title": [],
+            "view/item/context": [
+                {
+                    "command": "subExplorer.addItem",
+                    "when": "viewItem == group && view == subExplorerView",
+                    "group": "navigation@10"
+                },
+                {
+                    "command": "subExplorer.renameGroup",
+                    "when": "viewItem == group && view == subExplorerView",
+                    "group": "navigation@11"
+                },
+                {
+                    "command": "subExplorer.deleteGroup",
+                    "when": "viewItem == group && view == subExplorerView",
+                    "group": "navigation@12"
+                },
+                {
+                    "command": "subExplorer.revealInExplorer",
+                    "when": "(viewItem == group || viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@13"
+                },
+                {
+                    "command": "subExplorer.removeItem",
+                    "when": "viewItem == item && view == subExplorerView",
+                    "group": "navigation@14"
+                },
+                {
+                    "command": "subExplorer.openItem",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "subExplorer.openItemToSide",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "subExplorer.revealInOS",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@3"
+                },
+                {
+                    "command": "subExplorer.copyPath",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@90"
+                },
+                {
+                    "command": "subExplorer.copyRelativePath",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@91"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "package": "vsce package",
+        "lint": "eslint . --ext .ts"
+    },
+    "dependencies": {
+        "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^18.19.0",
+        "@types/vscode": "^1.83.0",
+        "@types/uuid": "^9.0.7",
+        "tslib": "^2.6.2",
+        "typescript": "^5.4.5",
+        "eslint": "^8.57.0",
+        "@typescript-eslint/eslint-plugin": "^6.7.4",
+        "@typescript-eslint/parser": "^6.7.4"
+    }
+}
