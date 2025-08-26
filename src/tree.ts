@@ -13,7 +13,7 @@ export class SubExplorerNode extends vscode.TreeItem {
         public readonly contextValue?: string,
         public readonly groupId?: string,
         public readonly rootRel?: string,
-    public readonly isTerminal?: boolean,
+        public readonly isTerminal?: boolean,
     ) {
         super(labelText, collapsibleState);
         if (resourceUri) {
@@ -93,60 +93,60 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         if (element.type === 'group') {
             const group = this.groups.find(g => g.id === element.groupId);
             if (!group) return [];
-                if (this.displayMode === 'fullPath') {
-                    return await this.buildPathChildren(group, undefined);
-                } else {
-                    const nodes: SubExplorerNode[] = [];
-                    for (const rel of group.items) {
-                        const uri = toFsUri(rel);
-                        if (!uri) continue;
-                        try {
-                            const stat = await vscode.workspace.fs.stat(uri);
-                            const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
-                            const label = path.basename(uri.fsPath);
-                            const node = new SubExplorerNode(
-                                'item',
-                                label,
-                                uri,
-                                isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-                                'item',
-                                group.id,
-                                rel,
-                                true,
-                            );
-                            node.tooltip = rel;
-                            nodes.push(node);
-                        } catch { }
-                    }
-                    return nodes;
+            if (this.displayMode === 'fullPath') {
+                return await this.buildPathChildren(group, undefined);
+            } else {
+                const nodes: SubExplorerNode[] = [];
+                for (const rel of group.items) {
+                    const uri = toFsUri(rel);
+                    if (!uri) continue;
+                    try {
+                        const stat = await vscode.workspace.fs.stat(uri);
+                        const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
+                        const label = path.basename(uri.fsPath);
+                        const node = new SubExplorerNode(
+                            'item',
+                            label,
+                            uri,
+                            isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                            'item',
+                            group.id,
+                            rel,
+                            true,
+                        );
+                        node.tooltip = rel;
+                        nodes.push(node);
+                    } catch { }
                 }
+                return nodes;
+            }
         }
 
-            if (element.type === 'path') {
-                const group = this.groups.find(g => g.id === element.groupId);
-                if (!group) return [];
-                if (element.isTerminal) {
-                    // Terminal path: if directory -> list real FS children, else leaf
-                    if (!element.resourceUri) return [];
-                    try {
-                        const stat = await vscode.workspace.fs.stat(element.resourceUri);
-                        const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
-                        if (!isDir) return [];
-                        return await this.listFsChildren(element);
-                    } catch {
-                        return [];
-                    }
+        if (element.type === 'path') {
+            const group = this.groups.find(g => g.id === element.groupId);
+            if (!group) return [];
+            if (element.isTerminal) {
+                // Terminal path: if directory -> list real FS children, else leaf
+                if (!element.resourceUri) return [];
+                try {
+                    const stat = await vscode.workspace.fs.stat(element.resourceUri);
+                    const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
+                    if (!isDir) return [];
+                    return await this.listFsChildren(element);
+                } catch {
+                    return [];
                 }
-                // Non-terminal path: build next path level
-                const prefixRel = this.makeRelFromUri(element.resourceUri!);
-                return await this.buildPathChildren(group, prefixRel);
             }
+            // Non-terminal path: build next path level
+            const prefixRel = this.makeRelFromUri(element.resourceUri!);
+            return await this.buildPathChildren(group, prefixRel);
+        }
 
         if (element.type === 'item' || element.type === 'fs') {
             // list children of a folder
             if (!element.resourceUri) return [];
             try {
-                    return await this.listFsChildren(element);
+                return await this.listFsChildren(element);
             } catch {
                 return [];
             }
@@ -155,76 +155,76 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         return [];
     }
 
-        private async buildPathChildren(group: GroupConfig, prefixRel: string | undefined): Promise<SubExplorerNode[]> {
-            // Build unique next segments under prefixRel (undefined means top-level under group)
-            const ws = vscode.workspace.workspaceFolders?.[0];
-            if (!ws) return [];
-            const prefix = prefixRel ? prefixRel.replace(/\\/g, '/') : '';
-            const seen = new Map<string, { fullRel: string; isTerminal: boolean }>();
-            for (const rel of group.items) {
-                if (prefix && !(rel === prefix || rel.startsWith(prefix + '/'))) continue;
-                const rest = prefix ? rel.slice(prefix.length).replace(/^\//, '') : rel;
-                const firstSeg = rest.split('/')[0];
-                if (!firstSeg) continue;
-                const segRel = prefix ? `${prefix}/${firstSeg}` : firstSeg;
-                const isTerminal = rel === segRel;
-                const prev = seen.get(firstSeg);
-                if (!prev) {
-                    seen.set(firstSeg, { fullRel: segRel, isTerminal });
-                } else {
-                    // if any is terminal, keep terminal true
-                    prev.isTerminal = prev.isTerminal || isTerminal;
-                }
+    private async buildPathChildren(group: GroupConfig, prefixRel: string | undefined): Promise<SubExplorerNode[]> {
+        // Build unique next segments under prefixRel (undefined means top-level under group)
+        const ws = vscode.workspace.workspaceFolders?.[0];
+        if (!ws) return [];
+        const prefix = prefixRel ? prefixRel.replace(/\\/g, '/') : '';
+        const seen = new Map<string, { fullRel: string; isTerminal: boolean }>();
+        for (const rel of group.items) {
+            if (prefix && !(rel === prefix || rel.startsWith(prefix + '/'))) continue;
+            const rest = prefix ? rel.slice(prefix.length).replace(/^\//, '') : rel;
+            const firstSeg = rest.split('/')[0];
+            if (!firstSeg) continue;
+            const segRel = prefix ? `${prefix}/${firstSeg}` : firstSeg;
+            const isTerminal = rel === segRel;
+            const prev = seen.get(firstSeg);
+            if (!prev) {
+                seen.set(firstSeg, { fullRel: segRel, isTerminal });
+            } else {
+                // if any is terminal, keep terminal true
+                prev.isTerminal = prev.isTerminal || isTerminal;
             }
-            const nodes: SubExplorerNode[] = [];
-            for (const [name, { fullRel, isTerminal }] of seen) {
-                const uri = toFsUri(fullRel);
-                if (!uri) continue;
-                try {
-                    const stat = await vscode.workspace.fs.stat(uri);
-                    const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
-                    const collapsible = isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
-                    const context = isTerminal ? 'item' : 'fs';
-                    const node = new SubExplorerNode(
-                        'path',
-                        name,
-                        uri,
-                        collapsible,
-                        context,
-                        group.id,
-                        fullRel,
-                        isTerminal,
-                    );
-                    node.tooltip = fullRel;
-                    nodes.push(node);
-                } catch { }
-            }
-            // sort alpha by label
-            nodes.sort((a, b) => a.label!.toString().localeCompare(b.label!.toString()));
-            return nodes;
         }
-
-        private async listFsChildren(element: SubExplorerNode): Promise<SubExplorerNode[]> {
-            const entries: [string, vscode.FileType][] = await vscode.workspace.fs.readDirectory(element.resourceUri!);
-            const rootRel = element.rootRel ?? this.findRootRel(element.groupId, element.resourceUri!);
-                const children = await Promise.all(entries.map(async ([name, ftype]: [string, vscode.FileType]) => {
-                const childUri = vscode.Uri.joinPath(element.resourceUri!, name);
-                const isDir = (ftype & vscode.FileType.Directory) === vscode.FileType.Directory;
-                    const label = name; // keep tree hierarchical; show only current node name
-                const child = new SubExplorerNode(
-                    'fs',
-                    label,
-                    childUri,
-                    isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
-                    'fs',
-                    element.groupId,
-                    rootRel,
+        const nodes: SubExplorerNode[] = [];
+        for (const [name, { fullRel, isTerminal }] of seen) {
+            const uri = toFsUri(fullRel);
+            if (!uri) continue;
+            try {
+                const stat = await vscode.workspace.fs.stat(uri);
+                const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
+                const collapsible = isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
+                const context = isTerminal ? 'item' : 'fs';
+                const node = new SubExplorerNode(
+                    'path',
+                    name,
+                    uri,
+                    collapsible,
+                    context,
+                    group.id,
+                    fullRel,
+                    isTerminal,
                 );
-                    child.tooltip = this.makeFullPathFromRoot(rootRel, childUri);
-                return child;
-            }));
-            return children;
+                node.tooltip = fullRel;
+                nodes.push(node);
+            } catch { }
         }
+        // sort alpha by label
+        nodes.sort((a, b) => a.label!.toString().localeCompare(b.label!.toString()));
+        return nodes;
+    }
+
+    private async listFsChildren(element: SubExplorerNode): Promise<SubExplorerNode[]> {
+        const entries: [string, vscode.FileType][] = await vscode.workspace.fs.readDirectory(element.resourceUri!);
+        const rootRel = element.rootRel ?? this.findRootRel(element.groupId, element.resourceUri!);
+        const children = await Promise.all(entries.map(async ([name, ftype]: [string, vscode.FileType]) => {
+            const childUri = vscode.Uri.joinPath(element.resourceUri!, name);
+            const isDir = (ftype & vscode.FileType.Directory) === vscode.FileType.Directory;
+            const label = name; // keep tree hierarchical; show only current node name
+            const child = new SubExplorerNode(
+                'fs',
+                label,
+                childUri,
+                isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
+                'fs',
+                element.groupId,
+                rootRel,
+            );
+            child.tooltip = this.makeFullPathFromRoot(rootRel, childUri);
+            return child;
+        }));
+        return children;
+    }
     private makeFullPathFromRoot(rootRel: string | undefined, uri: vscode.Uri): string {
         const ws = vscode.workspace.workspaceFolders?.[0];
         if (!ws) return uri.fsPath;
