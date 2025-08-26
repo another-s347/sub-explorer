@@ -6,7 +6,7 @@
         "url": "https://github.com/another-s347/sub-explorer.git"
     },
     "description": "Group-focused sub-tree explorer for large repos: create feature groups that show only selected folders/files in a sticky-scroll file tree.",
-    "version": "0.0.1",
+    "version": "0.0.2",
     "publisher": "another-s347",
     "engines": {
         "vscode": "^1.83.0"
@@ -50,55 +50,71 @@
         "commands": [
             {
                 "command": "subExplorer.addGroup",
-                "title": "Sub Explorer: Add Group"
+                "title": "%command.addGroup%",
+                "icon": "$(add)"
             },
             {
                 "command": "subExplorer.renameGroup",
-                "title": "Sub Explorer: Rename Group"
+                "title": "%command.renameGroup%"
+            },
+            {
+                "command": "subExplorer.copyGroup",
+                "title": "%command.copyGroup%",
+                "icon": "$(copy)"
             },
             {
                 "command": "subExplorer.deleteGroup",
-                "title": "Sub Explorer: Delete Group"
+                "title": "%command.deleteGroup%"
             },
             {
                 "command": "subExplorer.addItem",
-                "title": "Sub Explorer: Add Item (File/Folder)"
+                "title": "%command.addItem%"
             },
             {
                 "command": "subExplorer.removeItem",
-                "title": "Sub Explorer: Remove Item"
+                "title": "%command.removeItem%"
             },
             {
                 "command": "subExplorer.openItem",
-                "title": "Sub Explorer: Open"
+                "title": "%command.openItem%"
             },
             {
                 "command": "subExplorer.openItemToSide",
-                "title": "Sub Explorer: Open to Side"
+                "title": "%command.openItemToSide%"
             },
             {
                 "command": "subExplorer.revealInExplorer",
-                "title": "Sub Explorer: Reveal in Explorer"
+                "title": "%command.revealInExplorer%"
             },
             {
                 "command": "subExplorer.revealInOS",
-                "title": "Sub Explorer: Reveal in OS"
+                "title": "%command.revealInOS%"
             },
             {
                 "command": "subExplorer.copyPath",
-                "title": "Sub Explorer: Copy Path"
+                "title": "%command.copyPath%"
             },
             {
                 "command": "subExplorer.copyRelativePath",
-                "title": "Sub Explorer: Copy Relative Path"
+                "title": "%command.copyRelativePath%"
             },
             {
                 "command": "subExplorer.refresh",
-                "title": "Sub Explorer: Refresh"
+                "title": "%command.refresh%"
             },
             {
                 "command": "subExplorer.addSelectedToGroup",
-                "title": "Sub Explorer: Add Selected to Group"
+                "title": "%command.addSelectedToGroup%"
+            },
+            {
+                "command": "subExplorer.groupSettings",
+                "title": "%command.groupSettings%",
+                "icon": "$(settings)"
+            },
+            {
+                "command": "subExplorer.checkoutGroupRef",
+                "title": "%command.checkoutGroupRef%",
+                "icon": "$(cloud-download)"
             }
         ],
         "menus": {
@@ -109,27 +125,48 @@
                     "group": "navigation@100"
                 }
             ],
-            "view/title": [],
+            "view/title": [
+                {
+                    "command": "subExplorer.addGroup",
+                    "when": "view == subExplorerView",
+                    "group": "navigation@10"
+                }
+            ],
             "view/item/context": [
                 {
                     "command": "subExplorer.addItem",
-                    "when": "viewItem == group && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
                     "group": "navigation@10"
                 },
                 {
                     "command": "subExplorer.renameGroup",
-                    "when": "viewItem == group && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
                     "group": "navigation@11"
                 },
                 {
-                    "command": "subExplorer.deleteGroup",
-                    "when": "viewItem == group && view == subExplorerView",
+                    "command": "subExplorer.copyGroup",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
                     "group": "navigation@12"
                 },
                 {
-                    "command": "subExplorer.revealInExplorer",
-                    "when": "(viewItem == group || viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "command": "subExplorer.checkoutGroupRef",
+                    "when": "viewItem == groupMismatch && view == subExplorerView",
+                    "group": "inline"
+                },
+                {
+                    "command": "subExplorer.deleteGroup",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
                     "group": "navigation@13"
+                },
+                {
+                    "command": "subExplorer.groupSettings",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "group": "navigation@20"
+                },
+                {
+                    "command": "subExplorer.revealInExplorer",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@30"
                 },
                 {
                     "command": "subExplorer.removeItem",

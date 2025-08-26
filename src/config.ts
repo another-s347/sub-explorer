@@ -6,6 +6,7 @@ export interface GroupConfig {
     id: string;
     name: string;
     items: string[]; // workspace-relative paths
+    gitRef?: string; // optional: bound branch name or commit hash
 }
 
 export interface SubExplorerConfig {

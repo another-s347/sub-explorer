@@ -80,14 +80,25 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
     async getChildren(element?: SubExplorerNode): Promise<SubExplorerNode[]> {
         if (!element) {
             // root: groups
-            return this.groups.map(g => new SubExplorerNode(
-                'group',
-                g.name,
-                undefined,
-                vscode.TreeItemCollapsibleState.Expanded,
-                'group',
-                g.id,
-            ));
+            // Root: groups; show gitRef if set
+            const gitBranch = await this.getCurrentBranch();
+            return this.groups.map(g => {
+                const mismatch = !!(g.gitRef && gitBranch && g.gitRef !== gitBranch);
+                const contextVal = mismatch ? 'groupMismatch' : 'group';
+                const node = new SubExplorerNode(
+                    'group',
+                    g.name,
+                    undefined,
+                    vscode.TreeItemCollapsibleState.Expanded,
+                    contextVal,
+                    g.id,
+                );
+                if (g.gitRef) {
+                    node.description = g.gitRef;
+                    node.tooltip = `${g.name} — ${g.gitRef}${mismatch ? ` (current: ${gitBranch ?? 'unknown'})` : ''}`;
+                }
+                return node;
+            });
         }
 
         if (element.type === 'group') {
@@ -115,6 +126,13 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                             true,
                         );
                         node.tooltip = rel;
+                        if (!isDir) {
+                            node.command = {
+                                command: 'vscode.open',
+                                title: 'Open',
+                                arguments: [uri]
+                            };
+                        }
                         nodes.push(node);
                     } catch { }
                 }
@@ -196,6 +214,13 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                     isTerminal,
                 );
                 node.tooltip = fullRel;
+                if (isTerminal && !isDir) {
+                    node.command = {
+                        command: 'vscode.open',
+                        title: 'Open',
+                        arguments: [uri]
+                    };
+                }
                 nodes.push(node);
             } catch { }
         }
@@ -221,6 +246,13 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                 rootRel,
             );
             child.tooltip = this.makeFullPathFromRoot(rootRel, childUri);
+            if (!isDir) {
+                child.command = {
+                    command: 'vscode.open',
+                    title: 'Open',
+                    arguments: [childUri]
+                };
+            }
             return child;
         }));
         return children;
@@ -257,5 +289,25 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         const ws = vscode.workspace.workspaceFolders?.[0];
         if (!ws) return uri.fsPath.replace(/\\/g, '/');
         return path.relative(ws.uri.fsPath, uri.fsPath).replace(/\\/g, '/');
+    }
+
+    private async getCurrentBranch(): Promise<string | undefined> {
+        // Try the built-in Git extension API first; fallback to reading HEAD file.
+        try {
+            const gitExt = vscode.extensions.getExtension('vscode.git');
+            const api = gitExt?.exports?.getAPI?.(1);
+            const repo = api?.repositories?.[0];
+            const branch = repo?.state?.HEAD?.name;
+            if (branch) return branch;
+        } catch { }
+        try {
+            const ws = vscode.workspace.workspaceFolders?.[0];
+            if (!ws) return undefined;
+            const headUri = vscode.Uri.joinPath(ws.uri, '.git/HEAD');
+            const data = await vscode.workspace.fs.readFile(headUri);
+            const text = Buffer.from(data).toString('utf8').trim();
+            const m = text.match(/^ref: refs\/heads\/(.+)$/);
+            return m ? m[1] : undefined;
+        } catch { return undefined; }
     }
 }
