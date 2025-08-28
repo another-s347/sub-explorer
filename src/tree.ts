@@ -28,21 +28,24 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
     private groups: GroupConfig[] = [];
-    private fsWatcher?: vscode.FileSystemWatcher;
+    private fsWatchers: vscode.FileSystemWatcher[] = [];
     private cfgWatcher?: vscode.FileSystemWatcher;
     private displayMode: 'name' | 'fullPath' = 'name';
+    private collapseOthersOnActivate = false;
+    private activeBehaviorEnabled = true;
+    private dirCache: Map<string, { entries: [string, vscode.FileType][], ts: number }> = new Map();
+    private branchCache?: { value?: string; ts: number };
+    private refreshTimer?: NodeJS.Timeout;
+    private activeGroupId?: string;
+    private output: vscode.OutputChannel;
 
     constructor(private readonly context: vscode.ExtensionContext) {
+        this.output = vscode.window.createOutputChannel('Sub Explorer');
+        this.activeGroupId = context.workspaceState.get<string>('subExplorer.activeGroupId');
         this.refresh();
         // Watch config file changes and workspace file changes for refresh
         const ws = vscode.workspace.workspaceFolders?.[0];
         if (ws) {
-            // Light FS watcher to refresh when files change under included folders (best-effort)
-            this.fsWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(ws, '**'));
-            this.fsWatcher.onDidChange(() => this._onDidChangeTreeData.fire());
-            this.fsWatcher.onDidCreate(() => this._onDidChangeTreeData.fire());
-            this.fsWatcher.onDidDelete(() => this._onDidChangeTreeData.fire());
-
             // Config watcher
             this.cfgWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(ws, '.vscode/sub-explorer.json'));
             this.cfgWatcher.onDidChange(() => this.refresh());
@@ -52,17 +55,23 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         // React to display mode setting changes
         this.context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration(e => {
-                if (e.affectsConfiguration('subExplorer.displayMode')) {
+                if (
+                    e.affectsConfiguration('subExplorer.displayMode') ||
+                    e.affectsConfiguration('subExplorer.collapseOthersOnActivate') ||
+                    e.affectsConfiguration('subExplorer.activeBehaviorEnabled')
+                ) {
                     const mode = vscode.workspace.getConfiguration('subExplorer').get<'name' | 'fullPath'>('displayMode', 'name');
                     this.displayMode = mode;
-                    this._onDidChangeTreeData.fire();
+                    this.collapseOthersOnActivate = vscode.workspace.getConfiguration('subExplorer').get<boolean>('collapseOthersOnActivate', false);
+                    this.activeBehaviorEnabled = vscode.workspace.getConfiguration('subExplorer').get<boolean>('activeBehaviorEnabled', true);
+                    this.fireRefreshDebounced();
                 }
             })
         );
     }
 
     dispose() {
-        this.fsWatcher?.dispose();
+        this.disposeFsWatchers();
         this.cfgWatcher?.dispose();
     }
 
@@ -70,11 +79,74 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         this.groups = (await loadConfig()).groups;
         const mode = vscode.workspace.getConfiguration('subExplorer').get<'name' | 'fullPath'>('displayMode', 'name');
         this.displayMode = mode;
+        this.collapseOthersOnActivate = vscode.workspace.getConfiguration('subExplorer').get<boolean>('collapseOthersOnActivate', false);
+        this.activeBehaviorEnabled = vscode.workspace.getConfiguration('subExplorer').get<boolean>('activeBehaviorEnabled', true);
+        this.branchCache = undefined;
+        this.dirCache.clear();
+        this.resetFsWatchers();
         this._onDidChangeTreeData.fire();
     }
 
     getTreeItem(element: SubExplorerNode): vscode.TreeItem {
         return element;
+    }
+
+    async getParent(element: SubExplorerNode): Promise<SubExplorerNode | undefined> {
+        // Group is root
+        if (element.type === 'group') return undefined;
+        const group = this.groups.find(g => g.id === element.groupId);
+        if (!group) return undefined;
+
+        // Parent of top-level item (name mode) is the group
+        if (element.type === 'item') {
+            const node = new SubExplorerNode('group', group.name, undefined, vscode.TreeItemCollapsibleState.Expanded, this.activeGroupId === group.id ? 'groupActive' : 'group', group.id);
+            node.id = `group:${group.id}`;
+            return node;
+        }
+
+        // Parent of path node: either another path segment or the group
+        if (element.type === 'path') {
+            const fullRel = element.rootRel ?? '';
+            const idx = fullRel.lastIndexOf('/');
+            if (idx <= 0) {
+                const node = new SubExplorerNode('group', group.name, undefined, vscode.TreeItemCollapsibleState.Expanded, this.activeGroupId === group.id ? 'groupActive' : 'group', group.id);
+                node.id = `group:${group.id}`;
+                return node;
+            }
+            const parentRel = fullRel.slice(0, idx);
+            const parentUri = toFsUri(parentRel);
+            const pn = new SubExplorerNode('path', parentRel.split('/').pop() || parentRel, parentUri, vscode.TreeItemCollapsibleState.Collapsed, 'fs', group.id, parentRel, fullRel === parentRel);
+            pn.id = `path:${group.id}:${parentRel}`;
+            return pn;
+        }
+
+        // FS node: parent is previous directory; if equals rootRel, parent is item (name mode) or path (fullPath)
+        if (element.type === 'fs') {
+            if (!element.resourceUri) return undefined;
+            const wsRel = this.makeRelFromUri(element.resourceUri);
+            const parentWsRel = wsRel.includes('/') ? wsRel.slice(0, wsRel.lastIndexOf('/')) : '';
+            if (parentWsRel === (element.rootRel ?? '')) {
+                if (this.displayMode === 'name') {
+                    const uri = toFsUri(parentWsRel);
+                    const it = new SubExplorerNode('item', parentWsRel.split('/').pop() || parentWsRel, uri, vscode.TreeItemCollapsibleState.Collapsed, 'item', group.id, parentWsRel, true);
+                    it.id = `item:${group.id}:${parentWsRel}`;
+                    return it;
+                } else {
+                    const uri = toFsUri(parentWsRel);
+                    const pn = new SubExplorerNode('path', parentWsRel.split('/').pop() || parentWsRel, uri, vscode.TreeItemCollapsibleState.Collapsed, 'item', group.id, parentWsRel, true);
+                    pn.id = `path:${group.id}:${parentWsRel}`;
+                    return pn;
+                }
+            }
+            // Otherwise parent is another fs node
+            const parentUri = vscode.Uri.joinPath(element.resourceUri, '..');
+            const label = parentWsRel.split('/').pop() || parentWsRel;
+            const fsn = new SubExplorerNode('fs', label, parentUri, vscode.TreeItemCollapsibleState.Collapsed, 'fs', group.id, element.rootRel);
+            const relParent = this.makeRelFromUri(parentUri);
+            fsn.id = `fs:${group.id}:${relParent}`;
+            return fsn;
+        }
+        return undefined;
     }
 
     async getChildren(element?: SubExplorerNode): Promise<SubExplorerNode[]> {
@@ -84,17 +156,28 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
             const gitBranch = await this.getCurrentBranch();
             return this.groups.map(g => {
                 const mismatch = !!(g.gitRef && gitBranch && g.gitRef !== gitBranch);
-                const contextVal = mismatch ? 'groupMismatch' : 'group';
+                const isActive = this.activeBehaviorEnabled && this.activeGroupId === g.id;
+                const contextVal = mismatch
+                    ? (isActive ? 'groupMismatchActive' : 'groupMismatch')
+                    : (isActive ? 'groupActive' : 'group');
+                const collapsible = (this.activeBehaviorEnabled && this.collapseOthersOnActivate && this.activeGroupId)
+                    ? (isActive ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed)
+                    : vscode.TreeItemCollapsibleState.Expanded;
                 const node = new SubExplorerNode(
                     'group',
                     g.name,
                     undefined,
-                    vscode.TreeItemCollapsibleState.Expanded,
+                    collapsible,
                     contextVal,
                     g.id,
                 );
+                node.id = `group:${g.id}`;
+                // Secondary text (description): show gitRef and/or active marker
+                const descParts: string[] = [];
+                if (g.gitRef) descParts.push(g.gitRef);
+                if (isActive) descParts.push('active');
+                node.description = descParts.length ? descParts.join(' • ') : undefined;
                 if (g.gitRef) {
-                    node.description = g.gitRef;
                     node.tooltip = `${g.name} — ${g.gitRef}${mismatch ? ` (current: ${gitBranch ?? 'unknown'})` : ''}`;
                 }
                 return node;
@@ -125,17 +208,19 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                             rel,
                             true,
                         );
+                        node.id = `item:${group.id}:${rel}`;
                         node.tooltip = rel;
                         if (!isDir) {
                             node.command = {
-                                command: 'vscode.open',
+                                command: 'subExplorer.openItem',
                                 title: 'Open',
-                                arguments: [uri]
+                                arguments: [uri, group.id]
                             };
                         }
                         nodes.push(node);
                     } catch { }
                 }
+
                 return nodes;
             }
         }
@@ -173,6 +258,151 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
         return [];
     }
 
+    async setActiveGroup(id: string | undefined): Promise<void> {
+        // When disabled, ignore attempts to set a non-undefined active group.
+        if (!this.activeBehaviorEnabled && id) return;
+        if (this.activeGroupId === id) return;
+        this.activeGroupId = id;
+        this.context.workspaceState.update('subExplorer.activeGroupId', id);
+        if (this.collapseOthersOnActivate) {
+            this._onDidChangeTreeData.fire();
+        } else {
+            // Defer refresh a bit to avoid clearing selection immediately (reduces flicker)
+            setTimeout(() => this._onDidChangeTreeData.fire(), 250);
+        }
+        // Yield microtask
+        await new Promise(res => setTimeout(res, 0));
+    }
+
+    getActiveGroupId(): string | undefined {
+        return this.activeGroupId;
+    }
+
+    // Determine which group a URI belongs to (longest matching root across all groups)
+    public findGroupIdForUri(uri: vscode.Uri, preferGroupId?: string): string | undefined {
+        const dbg = vscode.workspace.getConfiguration('subExplorer').get<boolean>('debug', false);
+        const log = (m: string) => { if (dbg) this.output.appendLine(`[auto] ${m}`); };
+        const wsFolder = vscode.workspace.getWorkspaceFolder(uri);
+        const ws = wsFolder ?? vscode.workspace.workspaceFolders?.[0];
+        if (!ws) { log('no workspace for uri'); return undefined; }
+        const target = uri.fsPath;
+        const candidates: { gid: string; len: number; rel: string }[] = [];
+        for (const g of this.groups) {
+            for (const rel of g.items) {
+                const rootFs = path.join(ws.uri.fsPath, rel);
+                if (target === rootFs || target.startsWith(rootFs + path.sep)) {
+                    candidates.push({ gid: g.id, len: rootFs.length, rel });
+                }
+            }
+        }
+        if (candidates.length === 0) { log(`no matching group for ${target}`); return undefined; }
+        // Prefer current active group if it's a candidate
+        if (preferGroupId && candidates.some(c => c.gid === preferGroupId)) {
+            log(`keeping active group ${preferGroupId} for ${target}`);
+            return preferGroupId;
+        }
+        // Otherwise pick the most specific (longest root)
+        candidates.sort((a, b) => b.len - a.len);
+        const chosen = candidates[0];
+        log(`candidates: ${candidates.map(c => `${c.gid}:${c.rel}:${c.len}`).join(', ')}`);
+        log(`chosen group for ${target}: ${chosen.gid}`);
+        return chosen.gid;
+    }
+
+    // Try to reveal a URI under the active group if it matches any group root
+    async revealInActiveGroup(uri: vscode.Uri, treeView: vscode.TreeView<SubExplorerNode>, options?: { focus?: boolean; selectFinal?: boolean; groupId?: string }): Promise<SubExplorerNode | undefined> {
+        const dbg = vscode.workspace.getConfiguration('subExplorer').get<boolean>('debug', false);
+        const log = (m: string) => { if (dbg) this.output.appendLine(`[reveal] ${m}`); };
+        // If disabled and no explicit groupId provided, do nothing
+        if (!this.activeBehaviorEnabled && !options?.groupId) { log('active behavior disabled'); return undefined; }
+        const gid = options?.groupId ?? this.activeGroupId;
+        if (!gid) { log('no active group'); return undefined; }
+        const group = this.groups.find(g => g.id === gid);
+        if (!group) { log('active group not found'); return undefined; }
+        // Support multi-root: pick the workspace folder that contains the target file
+        const wsFolder = vscode.workspace.getWorkspaceFolder(uri);
+        const ws = wsFolder ?? vscode.workspace.workspaceFolders?.[0];
+        if (!ws) { log('no workspace'); return undefined; }
+        // Check if the file sits under any of the group's roots
+        const fsPath = uri.fsPath;
+        let rootRel: string | undefined;
+        let bestLen = -1;
+        for (const rel of group.items) {
+            const rootFs = path.join(ws.uri.fsPath, rel);
+            if (fsPath === rootFs || fsPath.startsWith(rootFs + path.sep)) {
+                if (rootFs.length > bestLen) {
+                    rootRel = rel;
+                    bestLen = rootFs.length;
+                }
+            }
+        }
+        log(`match rootRel=${rootRel ?? 'none'} for ${fsPath}`);
+        if (!rootRel) return undefined;
+        const absRoot = path.join(ws.uri.fsPath, rootRel!);
+        const rootSegs = rootRel.split('/');
+        const relUnderRoot = path.relative(absRoot, fsPath).replace(/\\/g, '/');
+        const fileSegs = relUnderRoot ? relUnderRoot.split('/') : [];
+        // Reveal the group node first
+        const groups = await this.getChildren();
+        const groupNode = groups.find(n => n.type === 'group' && n.groupId === gid);
+        if (!groupNode) { log('group node not found'); return undefined; }
+
+        // Walk depending on display mode
+        let parent: SubExplorerNode = groupNode;
+        if (this.displayMode === 'name') {
+            // Top are items; find the root item then walk file segments
+            const topChildren = await this.getChildren(groupNode);
+            const rootItem = topChildren.find(n => n.rootRel === rootRel)
+                ?? topChildren.find(n => n.label?.toString() === path.basename(rootRel!));
+            if (!rootItem) { log('root item node not found'); return undefined; }
+
+            parent = rootItem;
+            for (const seg of fileSegs) {
+                const kids = await this.getChildren(parent);
+                const next = kids.find(k => k.label?.toString() === seg)
+                    ?? kids.find(k => k.resourceUri && path.basename(k.resourceUri.fsPath) === seg);
+                if (!next) { log(`segment not found (name): ${seg}`); break; }
+                parent = next;
+            }
+        } else {
+            // fullPath mode: walk root segments first (top-level path nodes), then file segments
+            const allSegs = [...rootSegs, ...fileSegs];
+            for (const seg of allSegs) {
+                const kids = await this.getChildren(parent);
+                const next = kids.find(k => k.label?.toString() === seg)
+                    ?? kids.find(k => k.resourceUri && k.resourceUri.fsPath.endsWith(path.sep + seg));
+                if (!next) { log(`segment not found (fullPath): ${seg}`); break; }
+                parent = next;
+            }
+        }
+        if (parent?.resourceUri?.fsPath !== fsPath) {
+            // Attempt a last-step match among current children by fsPath
+            const kids = await this.getChildren(parent);
+            const exact = kids.find(k => k.resourceUri?.fsPath === fsPath);
+            if (exact) {
+                try {
+                    log(`reveal final exact: ${exact.label}`);
+                    await treeView.reveal(exact, { expand: true, focus: !!options?.focus, select: !!options?.selectFinal });
+                } catch (err: any) {
+                    log(`final reveal(exact) failed: ${err?.message ?? String(err)}`);
+                }
+                return exact;
+            } else {
+                log('final node not matched');
+            }
+        } else {
+            // Parent itself is the target file/folder
+            try {
+                log(`reveal final parent: ${parent.label}`);
+                await treeView.reveal(parent, { expand: true, focus: !!options?.focus, select: !!options?.selectFinal });
+            } catch (err: any) {
+                log(`final reveal(parent) failed: ${err?.message ?? String(err)}`);
+            }
+            return parent;
+        }
+        return undefined;
+    }
+
     private async buildPathChildren(group: GroupConfig, prefixRel: string | undefined): Promise<SubExplorerNode[]> {
         // Build unique next segments under prefixRel (undefined means top-level under group)
         const ws = vscode.workspace.workspaceFolders?.[0];
@@ -199,10 +429,18 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
             const uri = toFsUri(fullRel);
             if (!uri) continue;
             try {
-                const stat = await vscode.workspace.fs.stat(uri);
-                const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
-                const collapsible = isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
-                const context = isTerminal ? 'item' : 'fs';
+                let collapsible: vscode.TreeItemCollapsibleState;
+                let context: string;
+                if (!isTerminal) {
+                    // Non-terminal path segments are directories by construction; avoid stat for speed
+                    collapsible = vscode.TreeItemCollapsibleState.Collapsed;
+                    context = 'fs';
+                } else {
+                    const stat = await vscode.workspace.fs.stat(uri);
+                    const isDir = (stat.type & vscode.FileType.Directory) === vscode.FileType.Directory;
+                    collapsible = isDir ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None;
+                    context = 'item';
+                }
                 const node = new SubExplorerNode(
                     'path',
                     name,
@@ -213,13 +451,20 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                     fullRel,
                     isTerminal,
                 );
+                node.id = `path:${group.id}:${fullRel}`;
                 node.tooltip = fullRel;
-                if (isTerminal && !isDir) {
-                    node.command = {
-                        command: 'vscode.open',
-                        title: 'Open',
-                        arguments: [uri]
-                    };
+                if (isTerminal) {
+                    try {
+                        const st = await vscode.workspace.fs.stat(uri);
+                        const isDir = (st.type & vscode.FileType.Directory) === vscode.FileType.Directory;
+                        if (!isDir) {
+                            node.command = {
+                                command: 'subExplorer.openItem',
+                                title: 'Open',
+                                arguments: [uri, group.id]
+                            };
+                        }
+                    } catch { }
                 }
                 nodes.push(node);
             } catch { }
@@ -230,7 +475,7 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
     }
 
     private async listFsChildren(element: SubExplorerNode): Promise<SubExplorerNode[]> {
-        const entries: [string, vscode.FileType][] = await vscode.workspace.fs.readDirectory(element.resourceUri!);
+        const entries: [string, vscode.FileType][] = await this.readDirCached(element.resourceUri!);
         const rootRel = element.rootRel ?? this.findRootRel(element.groupId, element.resourceUri!);
         const children = await Promise.all(entries.map(async ([name, ftype]: [string, vscode.FileType]) => {
             const childUri = vscode.Uri.joinPath(element.resourceUri!, name);
@@ -245,17 +490,68 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
                 element.groupId,
                 rootRel,
             );
+            // Stable id based on workspace-relative path
+            const relWs = this.makeRelFromUri(childUri);
+            child.id = `fs:${element.groupId}:${relWs}`;
             child.tooltip = this.makeFullPathFromRoot(rootRel, childUri);
             if (!isDir) {
                 child.command = {
-                    command: 'vscode.open',
+                    command: 'subExplorer.openItem',
                     title: 'Open',
-                    arguments: [childUri]
+                    arguments: [childUri, element.groupId]
                 };
             }
             return child;
         }));
+        // Keep dictionary order like filesystem
+        children.sort((a, b) => a.label!.toString().localeCompare(b.label!.toString()));
         return children;
+    }
+
+    private async readDirCached(uri: vscode.Uri): Promise<[string, vscode.FileType][]> {
+        const key = uri.fsPath;
+        const now = Date.now();
+        const cached = this.dirCache.get(key);
+        if (cached && (now - cached.ts) < 3000) {
+            return cached.entries;
+        }
+        const entries = await vscode.workspace.fs.readDirectory(uri);
+        this.dirCache.set(key, { entries, ts: now });
+        return entries;
+    }
+
+    private fireRefreshDebounced() {
+        if (this.refreshTimer) {
+            clearTimeout(this.refreshTimer);
+        }
+        this.refreshTimer = setTimeout(() => {
+            this._onDidChangeTreeData.fire();
+        }, 150);
+    }
+
+    private resetFsWatchers() {
+        this.disposeFsWatchers();
+        const ws = vscode.workspace.workspaceFolders?.[0];
+        if (!ws) return;
+        // Create watchers only for configured roots to reduce churn
+        for (const g of this.groups) {
+            for (const rel of g.items) {
+                const pattern = new vscode.RelativePattern(ws, `${rel}/**`);
+                const w = vscode.workspace.createFileSystemWatcher(pattern);
+                const onChange = () => { this.dirCache.clear(); this.fireRefreshDebounced(); };
+                w.onDidChange(onChange);
+                w.onDidCreate(onChange);
+                w.onDidDelete(onChange);
+                this.fsWatchers.push(w);
+            }
+        }
+    }
+
+    private disposeFsWatchers() {
+        for (const w of this.fsWatchers) {
+            try { w.dispose(); } catch { }
+        }
+        this.fsWatchers = [];
     }
     private makeFullPathFromRoot(rootRel: string | undefined, uri: vscode.Uri): string {
         const ws = vscode.workspace.workspaceFolders?.[0];
@@ -293,12 +589,17 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
 
     private async getCurrentBranch(): Promise<string | undefined> {
         // Try the built-in Git extension API first; fallback to reading HEAD file.
+        const now = Date.now();
+        if (this.branchCache && (now - this.branchCache.ts) < 2000) {
+            return this.branchCache.value;
+        }
+        let value: string | undefined = undefined;
         try {
             const gitExt = vscode.extensions.getExtension('vscode.git');
             const api = gitExt?.exports?.getAPI?.(1);
             const repo = api?.repositories?.[0];
             const branch = repo?.state?.HEAD?.name;
-            if (branch) return branch;
+            if (branch) value = branch;
         } catch { }
         try {
             const ws = vscode.workspace.workspaceFolders?.[0];
@@ -307,7 +608,9 @@ export class SubExplorerProvider implements vscode.TreeDataProvider<SubExplorerN
             const data = await vscode.workspace.fs.readFile(headUri);
             const text = Buffer.from(data).toString('utf8').trim();
             const m = text.match(/^ref: refs\/heads\/(.+)$/);
-            return m ? m[1] : undefined;
-        } catch { return undefined; }
+            value = value ?? (m ? m[1] : undefined);
+        } catch { /* ignore */ }
+        this.branchCache = { value, ts: now };
+        return value;
     }
 }

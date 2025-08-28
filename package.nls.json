@@ -1,7 +1,12 @@
 {
     "command.addGroup": "Add Group",
+    "command.searchInGroup": "Search in Group",
+    "command.setActiveGroup": "Set as Active Group",
+    "command.clearActiveGroup": "Clear Active Group",
     "command.renameGroup": "Rename Group",
     "command.copyGroup": "Copy Group",
+    "command.moveGroupUp": "Move Group Up",
+    "command.moveGroupDown": "Move Group Down",
     "command.deleteGroup": "Delete Group",
     "command.addItem": "Add Item (File/Folder)",
     "command.removeItem": "Remove Item",

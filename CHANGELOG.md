@@ -1,5 +1,24 @@
 # Change Log
 
+## 0.0.3
+
+### Added
+- Setting `subExplorer.activeBehaviorEnabled` to toggle active-group behavior and editor auto-focus/reveal.
+- More detailed debug logs for reveal traversal to aid diagnostics.
+- Group reordering: drag-and-drop in the view and Move Group Up/Down commands, persisted in `.vscode/sub-explorer.json`.
+- Search in Group command to prefill Find in Files with the group's items (non-recursive top-level, with excludes for deeper levels).
+
+### Changed
+- Reveal path now expands folders without highlighting intermediate nodes; only the final target is selected.
+- Editor-driven sync uses focus: false to avoid stealing focus from the editor.
+
+### Fixed
+- Reduced flicker when clicking files across groups by awaiting active-group switch and re-selecting the clicked node.
+- Avoid duplicate reveals when a selection is immediately followed by an open command (guards via recent-selection and last-open markers).
+- More robust reveal on tab switch: ensure view is visible, retry selection briefly, and fallback to the owning group when the file is outside the active group.
+- Improved name-mode traversal by matching both label and `basename(resourceUri)`.
+- Minor stability improvements around refresh timing and throttling.
+
 ## 0.0.2
 
 ### Added

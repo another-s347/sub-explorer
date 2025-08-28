@@ -1,12 +1,67 @@
 import * as vscode from 'vscode';
 import { v4 as uuidv4 } from 'uuid';
 import { SubExplorerProvider, SubExplorerNode } from './tree';
-import { GroupConfig, SubExplorerConfig, loadConfig, saveConfig, toRelPath } from './config';
+import { GroupConfig, SubExplorerConfig, loadConfig, saveConfig, toRelPath, toFsUri } from './config';
 
 export async function activate(context: vscode.ExtensionContext) {
     const provider = new SubExplorerProvider(context);
-    const treeView = vscode.window.createTreeView('subExplorerView', { treeDataProvider: provider, showCollapseAll: true });
-    context.subscriptions.push(treeView);
+    // Suppress selection side-effects when selection is caused by programmatic reveal (e.g., editor sync)
+    let suppressSelectionEffects = false;
+    const isActiveBehaviorEnabled = () => vscode.workspace.getConfiguration('subExplorer').get<boolean>('activeBehaviorEnabled', true);
+    // Marker to detect editor activations that originate from Sub Explorer opens (avoid double reveal/focus flicker)
+    let lastUserOpen: { uri: vscode.Uri; ts: number } | undefined;
+    // Track the most recent tree selection time to avoid double-handling (selection + command)
+    let lastSelection: { uri?: vscode.Uri; ts: number } | undefined;
+
+    // Drag & Drop controller to reorder groups
+    class GroupDnDController implements vscode.TreeDragAndDropController<SubExplorerNode> {
+        public readonly dragMimeTypes = ['application/vnd.sub-explorer.group'];
+        public readonly dropMimeTypes = ['application/vnd.sub-explorer.group'];
+        constructor(private readonly ctx: vscode.ExtensionContext) { }
+        async handleDrag(source: readonly SubExplorerNode[], dataTransfer: vscode.DataTransfer): Promise<void> {
+            const groups = source.filter(n => n.type === 'group' && n.groupId).map(n => n.groupId!) as string[];
+            if (!groups.length) return;
+            dataTransfer.set('application/vnd.sub-explorer.group', new vscode.DataTransferItem(JSON.stringify(groups)));
+        }
+        async handleDrop(target: SubExplorerNode | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
+            const item = dataTransfer.get('application/vnd.sub-explorer.group');
+            if (!item) return;
+            let draggedIds: string[] = [];
+            try { draggedIds = JSON.parse(await item.asString()); } catch { return; }
+            if (!draggedIds.length) return;
+            // Only support dropping onto group area or a group node
+            if (target && target.type !== 'group') return;
+            const cfg = await loadConfig();
+            if (!cfg.groups.length) return;
+            const targetId = target?.groupId;
+            // Remove dragged from list preserving order of remaining
+            const remaining = cfg.groups.filter(g => !draggedIds.includes(g.id));
+            // Insert dragged before target (or at end if no target)
+            const draggedGroups = cfg.groups.filter(g => draggedIds.includes(g.id));
+            if (!draggedGroups.length) return;
+            let insertIdx = (targetId ? remaining.findIndex(g => g.id === targetId) : -1);
+            if (insertIdx < 0) insertIdx = remaining.length;
+            remaining.splice(insertIdx, 0, ...draggedGroups);
+            cfg.groups = remaining;
+            await saveConfig(cfg);
+            await provider.refresh();
+        }
+        dispose() { /* no-op */ }
+    }
+
+    const dnd = new GroupDnDController(context);
+    const treeView = vscode.window.createTreeView('subExplorerView', { treeDataProvider: provider, showCollapseAll: true, canSelectMany: true, dragAndDropController: dnd });
+    context.subscriptions.push(treeView, dnd);
+
+    // React to runtime toggle of active behavior
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('subExplorer.activeBehaviorEnabled')) {
+            if (!isActiveBehaviorEnabled()) {
+                // Clear active group so UI loses 'active' marker and collapse behavior
+                provider.setActiveGroup(undefined);
+            }
+        }
+    }));
 
     // Double-click on a group to rename: consider selection and expand/collapse events
     let lastGroupClick: { id?: string; time?: number } = {};
@@ -23,12 +78,90 @@ export async function activate(context: vscode.ExtensionContext) {
     };
     context.subscriptions.push(treeView.onDidChangeSelection(async (e) => {
         if (!e.selection || e.selection.length !== 1) { return; }
-        await handleGroupInteraction(e.selection[0] as SubExplorerNode);
+        const node = e.selection[0] as SubExplorerNode;
+        // Handle group double-click rename logic
+        await handleGroupInteraction(node);
+        if (suppressSelectionEffects) {
+            return; // ignore programmatic selection from editor-sync reveal
+        }
+        lastSelection = { uri: node?.resourceUri, ts: Date.now() };
+        // If any node inside a group is selected (file or directory/path/item), set that group active
+        if (isActiveBehaviorEnabled() && node && node.type !== 'group' && node.groupId) {
+            const current = provider.getActiveGroupId();
+            if (current !== node.groupId) {
+                // Switch active group, then re-select the clicked node to avoid flicker losing selection
+                suppressSelectionEffects = true;
+                try {
+                    await provider.setActiveGroup(node.groupId);
+                    // Small wait to let children recalc
+                    await new Promise(res => setTimeout(res, 50));
+                    if (node.resourceUri) {
+                        const leaf = await provider.revealInActiveGroup(node.resourceUri, treeView, { focus: false, selectFinal: true, groupId: node.groupId });
+                        if (leaf) {
+                            try { await treeView.reveal(leaf, { select: true, focus: false, expand: true }); } catch { /* ignore */ }
+                        }
+                    }
+                } finally {
+                    setTimeout(() => { suppressSelectionEffects = false; }, 150);
+                }
+                return;
+            }
+        }
     }));
     // Note: we intentionally do NOT use expand/collapse events for double-click detection
     // to avoid single-click expand being misinterpreted as a double-click.
 
     context.subscriptions.push(vscode.commands.registerCommand('subExplorer.refresh', () => provider.refresh()));
+
+    // Active group commands
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.setActiveGroup', async (node?: SubExplorerNode) => {
+        if (!node || node.type !== 'group' || !node.groupId) return;
+        provider.setActiveGroup(node.groupId);
+        const uri = vscode.window.activeTextEditor?.document?.uri;
+        if (uri && (uri.scheme === 'file' || uri.scheme === 'vscode-remote')) {
+            await provider.revealInActiveGroup(uri, treeView);
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.clearActiveGroup', async () => {
+        provider.setActiveGroup(undefined);
+    }));
+
+    // On editor change: only reveal under the current active group (no auto-activation)
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(async (ed) => {
+        if (!isActiveBehaviorEnabled()) return;
+        const uri = ed?.document?.uri;
+        if (!uri || (uri.scheme !== 'file' && uri.scheme !== 'vscode-remote')) return;
+        // If this activation is immediately after we opened from Sub Explorer, skip auto-reveal
+        if (lastUserOpen && lastUserOpen.uri.toString() === uri.toString() && (Date.now() - lastUserOpen.ts) < 800) {
+            lastUserOpen = undefined;
+            return;
+        }
+        suppressSelectionEffects = true;
+        try {
+            // Ensure the Sub Explorer view is visible so selection/highlight is shown
+            if (!treeView.visible) {
+                try { await vscode.commands.executeCommand('workbench.view.extension.subExplorer'); } catch { /* ignore */ }
+            }
+            let leaf = await provider.revealInActiveGroup(uri, treeView, { focus: false, selectFinal: true });
+            if (!leaf) {
+                // If not found under active group, try revealing under the file's owning group (do not change active)
+                const gid = provider.findGroupIdForUri(uri, provider.getActiveGroupId());
+                if (gid && gid !== provider.getActiveGroupId()) {
+                    leaf = await provider.revealInActiveGroup(uri, treeView, { focus: false, selectFinal: true, groupId: gid });
+                }
+            }
+            if (leaf) {
+                // Retry a couple of times in case the first selection is ignored due to render timing
+                for (let i = 0; i < 2; i++) {
+                    await new Promise(res => setTimeout(res, 100));
+                    try { await treeView.reveal(leaf, { select: true, focus: false, expand: true }); } catch { /* ignore */ }
+                }
+            }
+        } finally {
+            // Delay to allow selection event(s) from reveal to propagate before re-enabling
+            setTimeout(() => { suppressSelectionEffects = false; }, 350);
+        }
+    }));
 
     context.subscriptions.push(vscode.commands.registerCommand('subExplorer.addGroup', async () => {
         const name = await vscode.window.showInputBox({ prompt: 'Group name' });
@@ -77,6 +210,24 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(vscode.l10n.t('Group "{0}" copied to "{1}".', group.name, name));
     }));
 
+    // Move group up/down
+    const moveGroup = async (node: SubExplorerNode | undefined, dir: -1 | 1) => {
+        const cfg = await loadConfig();
+        const group = await pickGroupFromNodeOrQuickPick(cfg, node);
+        if (!group) return;
+        const idx = cfg.groups.findIndex(g => g.id === group.id);
+        if (idx < 0) return;
+        const swapWith = idx + dir;
+        if (swapWith < 0 || swapWith >= cfg.groups.length) return;
+        const tmp = cfg.groups[swapWith];
+        cfg.groups[swapWith] = cfg.groups[idx];
+        cfg.groups[idx] = tmp;
+        await saveConfig(cfg);
+        await provider.refresh();
+    };
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.moveGroupUp', async (node?: SubExplorerNode) => moveGroup(node, -1)));
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.moveGroupDown', async (node?: SubExplorerNode) => moveGroup(node, 1)));
+
     context.subscriptions.push(vscode.commands.registerCommand('subExplorer.addItem', async (node?: SubExplorerNode) => {
         const cfg = await loadConfig();
         const group = await pickGroupFromNodeOrQuickPick(cfg, node);
@@ -117,15 +268,24 @@ export async function activate(context: vscode.ExtensionContext) {
     }));
 
     // Explorer-like commands for file/dir nodes
-    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.openItem', async (node: SubExplorerNode) => {
-        if (!node?.resourceUri) return;
-        const stat = await vscode.workspace.fs.stat(node.resourceUri);
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.openItem', async (arg1?: any, arg2?: any) => {
+        // Supports invocation from tree nodes or direct command with (uri, groupId)
+        let uri: vscode.Uri | undefined;
+        let gidFromArg: string | undefined;
+        if (arg1 && typeof arg1 === 'object' && 'type' in arg1) {
+            const node = arg1 as SubExplorerNode;
+            uri = node.resourceUri;
+            gidFromArg = node.groupId;
+        } else {
+            uri = arg1 as vscode.Uri | undefined;
+            gidFromArg = typeof arg2 === 'string' ? arg2 : undefined;
+        }
+        if (!uri) return;
+        const stat = await vscode.workspace.fs.stat(uri);
         if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) {
-            await vscode.commands.executeCommand('revealInExplorer', node.resourceUri);
+            await vscode.commands.executeCommand('revealInExplorer', uri);
             return;
         }
-        const doc = await vscode.workspace.openTextDocument(node.resourceUri);
-        await vscode.window.showTextDocument(doc, { preview: false });
     }));
 
     // Checkout group ref: switch current repository to the group's bound ref
@@ -197,8 +357,17 @@ export async function activate(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand('revealInExplorer', node.resourceUri);
             return;
         }
+        // Mark as user-initiated open from Sub Explorer to avoid immediate auto-reveal
+        lastUserOpen = { uri: node.resourceUri, ts: Date.now() };
         const doc = await vscode.workspace.openTextDocument(node.resourceUri);
         await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+        const recentSelection = lastSelection && (Date.now() - lastSelection.ts) < 400 && lastSelection.uri?.toString() === node.resourceUri.toString();
+        if (!recentSelection && node.groupId && isActiveBehaviorEnabled()) {
+            if (node.groupId !== provider.getActiveGroupId()) {
+                await provider.setActiveGroup(node.groupId);
+            }
+            setTimeout(() => { provider.revealInActiveGroup(node.resourceUri!, treeView, { focus: false, selectFinal: false }).catch(() => { }); }, 30);
+        }
     }));
 
     context.subscriptions.push(vscode.commands.registerCommand('subExplorer.revealInOS', async (node: SubExplorerNode) => {
@@ -345,6 +514,67 @@ export async function activate(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand('subExplorer.refresh');
             vscode.window.showInformationMessage(`Added ${added} item(s) to group ${group.name}.`);
         }
+    }));
+
+    // Search within a group's items: prefill Find in Files includes (top-level only, using **)
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.searchInGroup', async (node?: SubExplorerNode) => {
+        const cfg = await loadConfig();
+        const group = await pickGroupFromNodeOrQuickPick(cfg, node);
+        if (!group) {
+            vscode.window.showInformationMessage(vscode.l10n.t('No group selected.'));
+            return;
+        }
+        if (!group.items || group.items.length === 0) {
+            vscode.window.showInformationMessage(vscode.l10n.t('This group has no items.'));
+            return;
+        }
+
+        // Build filesToInclude (non-recursive) and filesToExclude (block deeper levels)
+        // - file: include its exact path
+        // - directory: include immediate children only via path/* and exclude path/*/**
+        const parts: string[] = [];
+        const excludeParts: string[] = [];
+        for (const rel of group.items) {
+            const p = rel?.trim();
+            if (!p) continue;
+            try {
+                const uri = toFsUri(p);
+                if (!uri) { continue; }
+                const stat = await vscode.workspace.fs.stat(uri);
+                if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) {
+                    parts.push(`${p}/*`);
+                    excludeParts.push(`${p}/*/**`);
+                } else {
+                    parts.push(p);
+                }
+            } catch {
+                // If stat fails, default to non-recursive immediate children
+                parts.push(`${p}/*`);
+                excludeParts.push(`${p}/*/**`);
+            }
+        }
+        const uniq = Array.from(new Set(parts));
+        const uniqEx = Array.from(new Set(excludeParts));
+        if (uniq.length === 0) {
+            vscode.window.showInformationMessage(vscode.l10n.t('No valid paths found for this group.'));
+            return;
+        }
+        const includes = uniq.length === 1 ? uniq[0] : `{${uniq.join(',')}}`;
+        const excludes = uniqEx.length === 0 ? undefined : (uniqEx.length === 1 ? uniqEx[0] : `{${uniqEx.join(',')}}`);
+
+        // Open the search view with includes prefilled; user can type the query
+        await vscode.commands.executeCommand('workbench.action.findInFiles', {
+            query: '',
+            replace: undefined,
+            triggerSearch: false,
+            filesToInclude: includes,
+            filesToExclude: excludes,
+            isRegex: false,
+            isCaseSensitive: false,
+            matchWholeWord: false,
+            useExcludeSettingsAndIgnoreFiles: true
+        });
+        await vscode.commands.executeCommand('workbench.view.search');
     }));
 }
 

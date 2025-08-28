@@ -6,7 +6,7 @@
         "url": "https://github.com/another-s347/sub-explorer.git"
     },
     "description": "Group-focused sub-tree explorer for large repos: create feature groups that show only selected folders/files in a sticky-scroll file tree.",
-    "version": "0.0.2",
+    "version": "0.0.3",
     "publisher": "another-s347",
     "engines": {
         "vscode": "^1.83.0"
@@ -15,10 +15,18 @@
         "Other"
     ],
     "main": "./dist/extension.js",
+    "activationEvents": [
+        "onStartupFinished"
+    ],
     "contributes": {
         "configuration": {
             "title": "Sub Explorer",
             "properties": {
+                "subExplorer.activeBehaviorEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Enable active group behavior and auto-focus on the current editor file. Disable to stop auto-selecting groups on click and auto-revealing on editor changes."
+                },
                 "subExplorer.displayMode": {
                     "type": "string",
                     "enum": [
@@ -27,6 +35,16 @@
                     ],
                     "default": "name",
                     "description": "Controls how file/folder labels are shown in Sub Explorer: 'name' shows only the current node name; 'fullPath' shows the path from the group's root item to the node (top-level items use workspace-relative paths)."
+                },
+                "subExplorer.debug": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable debug logging to Output: Sub Explorer"
+                },
+                "subExplorer.collapseOthersOnActivate": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "When a group becomes active, collapse all other groups (implemented by collapsing all and re-expanding the active group)."
                 }
             }
         },
@@ -52,6 +70,31 @@
                 "command": "subExplorer.addGroup",
                 "title": "%command.addGroup%",
                 "icon": "$(add)"
+            },
+            {
+                "command": "subExplorer.moveGroupUp",
+                "title": "%command.moveGroupUp%",
+                "icon": "$(arrow-up)"
+            },
+            {
+                "command": "subExplorer.moveGroupDown",
+                "title": "%command.moveGroupDown%",
+                "icon": "$(arrow-down)"
+            },
+            {
+                "command": "subExplorer.setActiveGroup",
+                "title": "%command.setActiveGroup%",
+                "icon": "$(target)"
+            },
+            {
+                "command": "subExplorer.clearActiveGroup",
+                "title": "%command.clearActiveGroup%",
+                "icon": "$(close)"
+            },
+            {
+                "command": "subExplorer.searchInGroup",
+                "title": "%command.searchInGroup%",
+                "icon": "$(search)"
             },
             {
                 "command": "subExplorer.renameGroup",
@@ -121,7 +164,7 @@
             "explorer/context": [
                 {
                     "command": "subExplorer.addSelectedToGroup",
-                    "when": "resourceScheme == file",
+                    "when": "resourceScheme == file || resourceScheme == vscode-remote",
                     "group": "navigation@100"
                 }
             ],
@@ -133,6 +176,31 @@
                 }
             ],
             "view/item/context": [
+                {
+                    "command": "subExplorer.setActiveGroup",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView && viewItem != groupActive && viewItem != groupMismatchActive",
+                    "group": "navigation@8"
+                },
+                {
+                    "command": "subExplorer.moveGroupUp",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
+                    "group": "navigation@8.5"
+                },
+                {
+                    "command": "subExplorer.moveGroupDown",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
+                    "group": "navigation@8.6"
+                },
+                {
+                    "command": "subExplorer.clearActiveGroup",
+                    "when": "(viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
+                    "group": "navigation@8"
+                },
+                {
+                    "command": "subExplorer.searchInGroup",
+                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "group": "navigation@9"
+                },
                 {
                     "command": "subExplorer.addItem",
                     "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
