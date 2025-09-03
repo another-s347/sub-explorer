@@ -85,8 +85,26 @@ export async function activate(context: vscode.ExtensionContext) {
             return; // ignore programmatic selection from editor-sync reveal
         }
         lastSelection = { uri: node?.resourceUri, ts: Date.now() };
-        // If any node inside a group is selected (file or directory/path/item), set that group active
+        // If any node inside a group is selected, set that group active —
+        // BUT skip for leaf file nodes so the item command can run without interference.
         if (isActiveBehaviorEnabled() && node && node.type !== 'group' && node.groupId) {
+            if (node.resourceUri && node.collapsibleState === vscode.TreeItemCollapsibleState.None) {
+                // Likely a file leaf; let its command handle open. Also add a tiny fallback to ensure open occurs.
+                const clicked = node.resourceUri;
+                setTimeout(async () => {
+                    try {
+                        const ed = vscode.window.activeTextEditor;
+                        const alreadyOpen = ed && ed.document?.uri?.toString() === clicked.toString();
+                        const recentOpen = lastUserOpen && lastUserOpen.uri.toString() === clicked.toString() && (Date.now() - lastUserOpen.ts) < 600;
+                        if (!alreadyOpen && !recentOpen) {
+                            lastUserOpen = { uri: clicked, ts: Date.now() };
+                            const doc = await vscode.workspace.openTextDocument(clicked);
+                            await vscode.window.showTextDocument(doc, { preview: false });
+                        }
+                    } catch { /* ignore */ }
+                }, 10);
+                return; // Ensure we exit after the fallback logic
+            }
             const current = provider.getActiveGroupId();
             if (current !== node.groupId) {
                 // Switch active group, then re-select the clicked node to avoid flicker losing selection
@@ -136,12 +154,12 @@ export async function activate(context: vscode.ExtensionContext) {
             lastUserOpen = undefined;
             return;
         }
+        // Only auto-focus when Sub Explorer view is already visible
+        if (!treeView.visible) {
+            return;
+        }
         suppressSelectionEffects = true;
         try {
-            // Ensure the Sub Explorer view is visible so selection/highlight is shown
-            if (!treeView.visible) {
-                try { await vscode.commands.executeCommand('workbench.view.extension.subExplorer'); } catch { /* ignore */ }
-            }
             let leaf = await provider.revealInActiveGroup(uri, treeView, { focus: false, selectFinal: true });
             if (!leaf) {
                 // If not found under active group, try revealing under the file's owning group (do not change active)
@@ -529,11 +547,10 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
-        // Build filesToInclude (non-recursive) and filesToExclude (block deeper levels)
+        // Build filesToInclude only
         // - file: include its exact path
-        // - directory: include immediate children only via path/* and exclude path/*/**
+        // - directory: include immediate children only via path/* (no exclude)
         const parts: string[] = [];
-        const excludeParts: string[] = [];
         for (const rel of group.items) {
             const p = rel?.trim();
             if (!p) continue;
@@ -543,24 +560,20 @@ export async function activate(context: vscode.ExtensionContext) {
                 const stat = await vscode.workspace.fs.stat(uri);
                 if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) {
                     parts.push(`${p}/*`);
-                    excludeParts.push(`${p}/*/**`);
                 } else {
                     parts.push(p);
                 }
             } catch {
                 // If stat fails, default to non-recursive immediate children
                 parts.push(`${p}/*`);
-                excludeParts.push(`${p}/*/**`);
             }
         }
         const uniq = Array.from(new Set(parts));
-        const uniqEx = Array.from(new Set(excludeParts));
         if (uniq.length === 0) {
             vscode.window.showInformationMessage(vscode.l10n.t('No valid paths found for this group.'));
             return;
         }
         const includes = uniq.length === 1 ? uniq[0] : `{${uniq.join(',')}}`;
-        const excludes = uniqEx.length === 0 ? undefined : (uniqEx.length === 1 ? uniqEx[0] : `{${uniqEx.join(',')}}`);
 
         // Open the search view with includes prefilled; user can type the query
         await vscode.commands.executeCommand('workbench.action.findInFiles', {
@@ -568,7 +581,42 @@ export async function activate(context: vscode.ExtensionContext) {
             replace: undefined,
             triggerSearch: false,
             filesToInclude: includes,
-            filesToExclude: excludes,
+            filesToExclude: undefined,
+            isRegex: false,
+            isCaseSensitive: false,
+            matchWholeWord: false,
+            useExcludeSettingsAndIgnoreFiles: true
+        });
+        await vscode.commands.executeCommand('workbench.view.search');
+    }));
+
+    // Search in a specific file or directory node
+    context.subscriptions.push(vscode.commands.registerCommand('subExplorer.searchInNode', async (node?: SubExplorerNode) => {
+        if (!node?.resourceUri) {
+            vscode.window.showInformationMessage(vscode.l10n.t('No item selected.'));
+            return;
+        }
+        // Determine include: file -> exact; directory -> immediate children (/*)
+        let include = '';
+        try {
+            const stat = await vscode.workspace.fs.stat(node.resourceUri);
+            if ((stat.type & vscode.FileType.Directory) === vscode.FileType.Directory) {
+                const rel = toRelPath(node.resourceUri);
+                include = rel ? `${rel}/*` : `${node.resourceUri.fsPath}/*`;
+            } else {
+                const rel = toRelPath(node.resourceUri);
+                include = rel ? rel : node.resourceUri.fsPath;
+            }
+        } catch {
+            const rel = toRelPath(node.resourceUri);
+            include = rel ? `${rel}/*` : `${node.resourceUri.fsPath}/*`;
+        }
+        await vscode.commands.executeCommand('workbench.action.findInFiles', {
+            query: '',
+            replace: undefined,
+            triggerSearch: false,
+            filesToInclude: include,
+            filesToExclude: undefined,
             isRegex: false,
             isCaseSensitive: false,
             matchWholeWord: false,

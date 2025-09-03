@@ -1,6 +1,7 @@
 {
     "command.addGroup": "Add Group",
     "command.searchInGroup": "Search in Group",
+    "command.searchInNode": "Search In",
     "command.setActiveGroup": "Set as Active Group",
     "command.clearActiveGroup": "Clear Active Group",
     "command.renameGroup": "Rename Group",

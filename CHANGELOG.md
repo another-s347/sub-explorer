@@ -1,5 +1,21 @@
 # Change Log
 
+## 0.0.4 - 2025-09-03
+
+### Added
+- Search In on file and directory nodes: opens Find in Files with the Include field prefilled.
+	- File nodes use the exact relative path.
+	- Directory nodes use `path/*` (immediate children only) by default.
+
+### Changed
+- Search in Group now fills only the Include field; Exclude is no longer set.
+- Editor auto-reveal/focus now triggers only when the Sub Explorer view is visible (no auto-show), reducing surprise focus shifts.
+
+### Fixed
+- Restored reliable left-click open on file nodes; added a small fallback to ensure the file opens if the node command isn’t invoked.
+- Further reduced flicker when switching active groups and reselecting items by suppressing programmatic selection events and re-highlighting the final node only.
+- Active-group context menus now show the same actions as regular groups (Search in Group, Add Item, Rename, Copy, Delete, Group Settings, Reveal, and Checkout on mismatch).
+
 ## 0.0.3
 
 ### Added

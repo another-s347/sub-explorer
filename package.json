@@ -6,7 +6,7 @@
         "url": "https://github.com/another-s347/sub-explorer.git"
     },
     "description": "Group-focused sub-tree explorer for large repos: create feature groups that show only selected folders/files in a sticky-scroll file tree.",
-    "version": "0.0.3",
+    "version": "0.0.4",
     "publisher": "another-s347",
     "engines": {
         "vscode": "^1.83.0"
@@ -94,6 +94,11 @@
             {
                 "command": "subExplorer.searchInGroup",
                 "title": "%command.searchInGroup%",
+                "icon": "$(search)"
+            },
+            {
+                "command": "subExplorer.searchInNode",
+                "title": "%command.searchInNode%",
                 "icon": "$(search)"
             },
             {
@@ -198,42 +203,42 @@
                 },
                 {
                     "command": "subExplorer.searchInGroup",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@9"
                 },
                 {
                     "command": "subExplorer.addItem",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@10"
                 },
                 {
                     "command": "subExplorer.renameGroup",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@11"
                 },
                 {
                     "command": "subExplorer.copyGroup",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@12"
                 },
                 {
                     "command": "subExplorer.checkoutGroupRef",
-                    "when": "viewItem == groupMismatch && view == subExplorerView",
+                    "when": "(viewItem == groupMismatch || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "inline"
                 },
                 {
                     "command": "subExplorer.deleteGroup",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@13"
                 },
                 {
                     "command": "subExplorer.groupSettings",
-                    "when": "(viewItem == group || viewItem == groupMismatch) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive) && view == subExplorerView",
                     "group": "navigation@20"
                 },
                 {
                     "command": "subExplorer.revealInExplorer",
-                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "when": "(viewItem == group || viewItem == groupMismatch || viewItem == groupActive || viewItem == groupMismatchActive || viewItem == item || viewItem == fs) && view == subExplorerView",
                     "group": "navigation@30"
                 },
                 {
@@ -250,6 +255,11 @@
                     "command": "subExplorer.openItemToSide",
                     "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
                     "group": "navigation@2"
+                },
+                {
+                    "command": "subExplorer.searchInNode",
+                    "when": "(viewItem == item || viewItem == fs) && view == subExplorerView",
+                    "group": "navigation@3.5"
                 },
                 {
                     "command": "subExplorer.revealInOS",
